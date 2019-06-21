@@ -115,7 +115,7 @@ static Key keys[] = {
 	{ MODKEY          ,             XK_u,      unfloatvisible, {0} },
 	{ MODKEY|ShiftMask,             XK_space,  togglefloating, {0} },
 	{ MODKEY|ShiftMask,             XK_s,      togglesticky,   {0} },
-	//{ MODKEY,                       XK_f,      togglemonocle,  {.v = &layouts[2]} },
+	// { MODKEY,                       XK_f,      togglelayout,   {.v = &layouts[2]} },
 	{ MODKEY,                       XK_f,      togglefullscreen,{.v = &layouts[2]} },
 	{ MODKEY,                       XK_0,      view,           {.ui = ~0 } },
 	{ MODKEY|ShiftMask,             XK_0,      tag,            {.ui = ~0 } },

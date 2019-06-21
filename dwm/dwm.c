@@ -161,6 +161,7 @@ static int applysizehints(Client *c, int *x, int *y, int *w, int *h, int interac
 static void arrange(Monitor *m);
 static void arrangemon(Monitor *m);
 static void attach(Client *c);
+static void attachabove(Client *c);
 static void attachstack(Client *c);
 static void buttonpress(XEvent *e);
 static void checkotherwm(void);
@@ -228,7 +229,7 @@ static void togglebar(const Arg *arg);
 static void togglefloating(const Arg *arg);
 static void unfloatvisible(const Arg *arg);
 static void togglesticky(const Arg *arg);
-static void togglemonocle(const Arg *arg);
+static void togglelayout(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
@@ -430,6 +431,20 @@ attach(Client *c)
 {
 	c->next = c->mon->clients;
 	c->mon->clients = c;
+}
+
+void
+attachabove(Client *c)
+{
+	if(c->mon->sel == NULL || c->mon->sel == c->mon->clients || c->mon->sel->isfloating) {
+		attach(c);
+		return;
+	}
+
+	Client *at;
+	for(at = c->mon->clients; at->next != c->mon->sel; at = at->next);
+	c->next = at->next;
+	at->next = c;
 }
 
 void
@@ -1278,7 +1293,7 @@ void
 pop(Client *c)
 {
 	detach(c);
-	attach(c);
+	attachabove(c);
 	focus(c);
 	arrange(c->mon);
 }
@@ -1366,22 +1381,38 @@ void
 resizemouse(const Arg *arg)
 {
 	int ocx, ocy, nw, nh;
+	int ocx2, ocy2, nx, ny;
 	Client *c;
-	Monitor *m;
-	XEvent ev;
+    Monitor *m;
+    XEvent ev;
+	int horizcorner, vertcorner;
+	int di;
+	unsigned int dui;
+	Window dummy;
 	Time lasttime = 0;
 
 	if (!(c = selmon->sel))
 		return;
+    // if (!c->isfloating)
+		// return;
 	if (c->isfullscreen) /* no support resizing fullscreen windows by mouse */
 		return;
 	restack(selmon);
 	ocx = c->x;
 	ocy = c->y;
+    ocx2 = c->x + c->w;
+	ocy2 = c->y + c->h;
 	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
 		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess)
 		return;
-	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
+	if (!XQueryPointer (dpy, c->win, &dummy, &dummy, &di, &di, &nx, &ny, &dui))
+	       return;
+	horizcorner = nx < c->w / 2;
+	vertcorner = ny < c->h / 2;
+	XWarpPointer (dpy, None, c->win, 0, 0, 0, 0,
+		      horizcorner ? (-c->bw) : (c->w + c->bw - 1),
+		      vertcorner ? (-c->bw) : (c->h + c->bw - 1));
+
 	do {
 		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
 		switch(ev.type) {
@@ -1397,6 +1428,11 @@ resizemouse(const Arg *arg)
 
 			nw = MAX(ev.xmotion.x - ocx - 2 * c->bw + 1, 1);
 			nh = MAX(ev.xmotion.y - ocy - 2 * c->bw + 1, 1);
+			nx = horizcorner ? ev.xmotion.x : c->x;
+			ny = vertcorner ? ev.xmotion.y : c->y;
+			nw = MAX(horizcorner ? (ocx2 - nx) : (ev.xmotion.x - ocx - 2 * c->bw + 1), 1);
+			nh = MAX(vertcorner ? (ocy2 - ny) : (ev.xmotion.y - ocy - 2 * c->bw + 1), 1);
+
 			if (c->mon->wx + nw >= selmon->wx && c->mon->wx + nw <= selmon->wx + selmon->ww
 			&& c->mon->wy + nh >= selmon->wy && c->mon->wy + nh <= selmon->wy + selmon->wh)
 			{
@@ -1405,11 +1441,13 @@ resizemouse(const Arg *arg)
 					togglefloating(NULL);
 			}
 			if (!selmon->lt[selmon->sellt]->arrange || c->isfloating)
-				resize(c, c->x, c->y, nw, nh, 1);
+                resize(c, nx, ny, nw, nh, 1);
 			break;
 		}
-	} while (ev.type != ButtonRelease);
-	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
+    } while (ev.type != ButtonRelease);
+    XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
+            horizcorner ? (-c->bw) : (c->w + c->bw - 1),
+            vertcorner ? (-c->bw) : (c->h + c->bw - 1));
 	XUngrabPointer(dpy, CurrentTime);
 	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
 	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
@@ -1492,7 +1530,7 @@ sendmon(Client *c, Monitor *m)
 	detachstack(c);
 	c->mon = m;
 	c->tags = m->tagset[m->seltags]; /* assign tags of target monitor */
-	attach(c);
+	attachabove(c);
 	attachstack(c);
 	focus(NULL);
 	arrange(NULL);
@@ -1858,7 +1896,7 @@ togglesticky(const Arg *arg)
 }
 
 void
-togglemonocle(const Arg *arg)
+togglelayout(const Arg *arg)
 {
 	if (!selmon->sel)
 		return;
@@ -1922,6 +1960,7 @@ toggleview(const Arg *arg)
 
 		if (selmon->showbar != selmon->pertag->showbars[selmon->pertag->curtag])
 			togglebar(NULL);
+
 		focus(NULL);
 		arrange(selmon);
 	}
@@ -2078,7 +2117,7 @@ updategeom(void)
 					m->clients = c->next;
 					detachstack(c);
 					c->mon = mons;
-					attach(c);
+					attachabove(c);
 					attachstack(c);
 				}
 				if (m == selmon)
@@ -2216,69 +2255,69 @@ updatewmhints(Client *c)
 void
 view(const Arg *arg)
 {
-int i;
-   unsigned int tmptag;
-   if ((arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
-	   return;
-   selmon->seltags ^= 1; /* toggle sel tagset */
-   if (arg->ui & TAGMASK) {
-	   selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
-	   selmon->pertag->prevtag = selmon->pertag->curtag;
+    int i;
+    unsigned int tmptag;
 
-	   if (arg->ui == ~0)
-		   selmon->pertag->curtag = 0;
-	   else {
-		   for (i = 0; !(arg->ui & 1 << i); i++) ;
-		   selmon->pertag->curtag = i + 1;
-	   }
-   } else {
-	   tmptag = selmon->pertag->prevtag;
-	   selmon->pertag->prevtag = selmon->pertag->curtag;
-	   selmon->pertag->curtag = tmptag;
-   }
+    if ((arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
+        return;
+    selmon->seltags ^= 1; /* toggle sel tagset */
+    if (arg->ui & TAGMASK) {
+        selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
+        selmon->pertag->prevtag = selmon->pertag->curtag;
 
-   selmon->nmaster = selmon->pertag->nmasters[selmon->pertag->curtag];
-   selmon->mfact = selmon->pertag->mfacts[selmon->pertag->curtag];
-   selmon->sellt = selmon->pertag->sellts[selmon->pertag->curtag];
-   selmon->lt[selmon->sellt] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt];
-   selmon->lt[selmon->sellt^1] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt^1];
+        if (arg->ui == ~0)
+            selmon->pertag->curtag = 0;
+        else {
+            for (i = 0; !(arg->ui & 1 << i); i++) ;
+            selmon->pertag->curtag = i + 1;
+        }
+    } else {
+        tmptag = selmon->pertag->prevtag;
+        selmon->pertag->prevtag = selmon->pertag->curtag;
+        selmon->pertag->curtag = tmptag;
+    }
 
-   if (selmon->showbar != selmon->pertag->showbars[selmon->pertag->curtag])
-	   togglebar(NULL);
+    selmon->nmaster = selmon->pertag->nmasters[selmon->pertag->curtag];
+    selmon->mfact = selmon->pertag->mfacts[selmon->pertag->curtag];
+    selmon->sellt = selmon->pertag->sellts[selmon->pertag->curtag];
+    selmon->lt[selmon->sellt] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt];
+    selmon->lt[selmon->sellt^1] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt^1];
 
-   selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
-   focus(NULL);
-   arrange(selmon);
+    if (selmon->showbar != selmon->pertag->showbars[selmon->pertag->curtag])
+        togglebar(NULL);
+
+    focus(NULL);
+    arrange(selmon);
 }
 
 Client *
 wintoclient(Window w)
 {
-	Client *c;
-	Monitor *m;
+    Client *c;
+    Monitor *m;
 
-	for (m = mons; m; m = m->next)
-		for (c = m->clients; c; c = c->next)
-			if (c->win == w)
-				return c;
-	return NULL;
+    for (m = mons; m; m = m->next)
+        for (c = m->clients; c; c = c->next)
+            if (c->win == w)
+                return c;
+    return NULL;
 }
 
 Monitor *
 wintomon(Window w)
 {
-	int x, y;
-	Client *c;
-	Monitor *m;
+    int x, y;
+    Client *c;
+    Monitor *m;
 
-	if (w == root && getrootptr(&x, &y))
-		return recttomon(x, y, 1, 1);
-	for (m = mons; m; m = m->next)
-		if (w == m->barwin)
-			return m;
-	if ((c = wintoclient(w)))
-		return c->mon;
-	return selmon;
+    if (w == root && getrootptr(&x, &y))
+        return recttomon(x, y, 1, 1);
+    for (m = mons; m; m = m->next)
+        if (w == m->barwin)
+            return m;
+    if ((c = wintoclient(w)))
+        return c->mon;
+    return selmon;
 }
 
 /* There's no way to check accesses to destroyed windows, thus those cases are
